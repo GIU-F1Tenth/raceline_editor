@@ -5,7 +5,7 @@ from enum import Enum
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class drawer_config(Enum):
+class DrawerConfig(Enum):
     MAP_YAML = os.path.join(PROJECT_ROOT, "original_maps", "map.yaml")
     RACING_CSV = os.path.join(
         PROJECT_ROOT, "original_racinglines", "input_racingline.csv")
@@ -15,7 +15,7 @@ class drawer_config(Enum):
     OTHER_POINTS_COLOR = "#ff0000"  # Red for other points
 
 
-class extractor_config(Enum):
+class ExtractorConfig(Enum):
     MOD_MAP_PATH = os.path.join(PROJECT_ROOT, "mod_maps", "mod_map.png")
     MAP_YAML = os.path.join(PROJECT_ROOT, "original_maps", "map.yaml")
     RACING_CSV = os.path.join(
