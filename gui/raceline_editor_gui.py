@@ -1,13 +1,13 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import cv2
-import numpy as np
-from PIL import Image, ImageTk
-import yaml
-import csv
 import os
-from scipy.interpolate import splprep, splev
+
+from PIL import Image, ImageTk
+
 from config import DrawerConfig
+from extractor import load_map_from_yaml, load_raceline_from_csv, save_raceline_to_csv
+from spline import generate_spline, velocity_to_color
 
 
 class RacelineEditorGUI:
@@ -205,17 +205,16 @@ class RacelineEditorGUI:
         self.status_var.set(f"Save from Spline {state}")
     
     def load_default_data(self):
-        """Load default map and raceline data"""
         try:
-            # Load map
             map_yaml_path = DrawerConfig.MAP_YAML.value
             if os.path.exists(map_yaml_path):
-                self.load_map_from_yaml(map_yaml_path)
+                self.map_image, self.map_metadata = load_map_from_yaml(map_yaml_path)
 
-            # Load raceline
             raceline_path = DrawerConfig.RACING_CSV.value
             if os.path.exists(raceline_path):
-                self.load_raceline_from_csv(raceline_path)
+                self.raceline_points = load_raceline_from_csv(raceline_path)
+                self.min_velocity = min(p[2] for p in self.raceline_points)
+                self.max_velocity = max(p[2] for p in self.raceline_points)
 
         except Exception as e:
             self.status_var.set(f"Error loading default data: {str(e)}")
@@ -232,70 +231,34 @@ class RacelineEditorGUI:
                 self.status_var.set(
                     f"Ready - {len(self.raceline_points)} points loaded")
 
-    def load_map_from_yaml(self, yaml_path):
-        """Load map image and metadata from YAML file"""
-        try:
-            with open(yaml_path, 'r') as f:
-                self.map_metadata = yaml.safe_load(f)
+    def load_map(self):
+        file_path = filedialog.askopenfilename(
+            title="Load Map YAML",
+            filetypes=[("YAML files", "*.yaml"), ("All files", "*.*")]
+        )
 
-            # Load the map image
-            image_path = os.path.join(os.path.dirname(
-                yaml_path), self.map_metadata['image'])
-            self.map_image = cv2.imread(image_path)
-            if self.map_image is None:
-                raise FileNotFoundError(f"Could not load image: {image_path}")
+        if file_path:
+            try:
+                self.map_image, self.map_metadata = load_map_from_yaml(file_path)
+                self.reset_view()
+                self.status_var.set("Map loaded successfully")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load map: {str(e)}")
 
-            self.map_image = cv2.cvtColor(self.map_image, cv2.COLOR_BGR2RGB)
-            self.reset_view()
-            self.status_var.set("Map loaded successfully")
+    def load_raceline(self):
+        file_path = filedialog.askopenfilename(
+            title="Load Raceline",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
 
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load map: {str(e)}")
-
-    def load_raceline_from_csv(self, csv_path):
-        """Load raceline points from CSV file"""
-        try:
-            self.raceline_points = []
-            with open(csv_path, 'r') as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if len(row) >= 2:
-                        x, y = float(row[0]), float(row[1])
-                        velocity = float(row[2]) if len(row) > 2 else 1.0
-                        self.raceline_points.append([x, y, velocity])
-              
-            # Validate the loaded points
-            if len(self.raceline_points) < 2:
-                raise ValueError("Need at least 2 points for a raceline")
-
-            self.min_velocity = min(point[2] for point in self.raceline_points)
-            self.max_velocity = max(point[2] for point in self.raceline_points)
-            
-            # Check for duplicate points that might cause spline issues
-            unique_points = []
-            for i, point in enumerate(self.raceline_points):
-                is_duplicate = False
-                for j, existing in enumerate(unique_points):
-                    if abs(point[0] - existing[0]) < 1e-10 and abs(point[1] - existing[1]) < 1e-10:
-                        print(
-                            f"Warning: Duplicate point found at index {i}: {point}")
-                        is_duplicate = True
-                        break
-                if not is_duplicate:
-                    unique_points.append(point)
-
-            if len(unique_points) < len(self.raceline_points):
-                print(
-                    f"Removed {len(self.raceline_points) - len(unique_points)} duplicate points")
-                self.raceline_points = unique_points
-
-            self.current_file = csv_path
+        if file_path:
+            self.raceline_points = load_raceline_from_csv(file_path)
+            self.min_velocity = min(p[2] for p in self.raceline_points)
+            self.max_velocity = max(p[2] for p in self.raceline_points)
+            self.current_file = file_path
             self.update_display()
             self.update_info_display()
             self.status_var.set(f"Loaded {len(self.raceline_points)} points")
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load raceline: {str(e)}")
 
     def world_to_canvas_coords(self, x, y):
         """Convert world coordinates to canvas coordinates"""
@@ -400,159 +363,61 @@ class RacelineEditorGUI:
                                         fill=text_color, font=("Arial", 8), tags="velocity_label")
 
     def update_spline(self, event=None):
-        """Update and draw the cubic spline"""
-        # Clear existing spline first
         self.canvas.delete("spline")
 
         if len(self.raceline_points) < 3:
             return
 
         try:
-            # Extract coordinates
-            points = np.array(self.raceline_points)
-            x_coords = points[:, 0]
-            y_coords = points[:, 1]
-            v_coords = points[:, 2]
-
-            # Remove any duplicate consecutive points that might cause issues
-            unique_indices = []
-            for i in range(len(x_coords)):
-                if i == 0 or (x_coords[i] != x_coords[i-1] or y_coords[i] != y_coords[i-1]):
-                    unique_indices.append(i)
-
-            if len(unique_indices) < 3:
-                self.draw_simple_spline_fallback()
-                return
-
-            x_coords = x_coords[unique_indices]
-            y_coords = y_coords[unique_indices]
-            v_coords = v_coords[unique_indices]
-
-            # For closed loop, duplicate first point at end
-            x_coords_closed = np.append(x_coords, x_coords[0])
-            y_coords_closed = np.append(y_coords, y_coords[0])
-            v_coords_closed = np.append(v_coords, v_coords[0])
-            
-            # Get spline parameters
             smoothness = max(0.0, self.smoothness_var.get())
             resolution = max(50, int(self.resolution_var.get()))
 
-            # Determine spline degree based on number of points
-            num_points = len(x_coords_closed)
-            if num_points >= 4:
-                k = min(3, num_points - 1)  # Cubic spline if possible
-                use_periodic = True
-            else:
-                k = min(2, num_points - 1)  # Linear or quadratic
-                use_periodic = False
+            self.spline_points = generate_spline(self.raceline_points, smoothness, resolution)
 
-            # Create parametric spline with error handling
-            try:
-                if use_periodic and num_points > 4:
-                    # Try periodic spline first
-                    tck, u = splprep([x_coords_closed, y_coords_closed],
-                                     s=smoothness, per=True, k=k)
-                else:
-                    # Use non-periodic spline
-                    tck, u = splprep([x_coords_closed, y_coords_closed],
-                                     s=smoothness, per=False, k=k)
-            except Exception as periodic_error:
-                # Fallback to non-periodic with lower degree
-                print(
-                    f"Periodic spline failed: {periodic_error}, trying non-periodic")
-                k = min(2, num_points - 1)
-                tck, u = splprep([x_coords_closed, y_coords_closed],
-                                 s=smoothness, per=False, k=k)
+            if self.spline_points is None:
+                self.draw_simple_spline_fallback()
+                return
 
-            # Generate spline points
-            new_t = np.linspace(0, 1, resolution)
-            spline_coords = splev(new_t, tck)
-            v_spline = np.interp(new_t, u, v_coords_closed)
-            
-            self.spline_points = list(zip(spline_coords[0], spline_coords[1], v_spline))
-
-            self.__draw_spline()
+            self.draw_spline()
 
         except Exception as e:
-            # Fallback: draw simple lines between points if spline fails
-            error_msg = str(e)
-            print(f"Spline generation failed: {error_msg}")
-
-            # Provide specific error guidance
-            if "k > m" in error_msg or "degree" in error_msg.lower():
-                self.status_var.set(
-                    "Too few points for cubic spline - using simple curve")
-            elif "singular" in error_msg.lower() or "matrix" in error_msg.lower():
-                self.status_var.set(
-                    "Collinear points detected - using simple curve")
-            elif "periodic" in error_msg.lower():
-                self.status_var.set(
-                    "Periodic spline failed - using simple curve")
-            else:
-                self.status_var.set(f"Spline error - using simple curve")
-
+            print(f"Spline generation failed: {e}")
+            self.status_var.set(f"Spline error - using simple curve")
             self.draw_simple_spline_fallback()
 
-    def __velocity_to_color(self, velocity):
-        """Map velocity to a color (blue=slow, green=medium, red=fast)"""
-        v = max(self.min_velocity, min(self.max_velocity, velocity))
-        t = (v - self.min_velocity) / (self.max_velocity - self.min_velocity) if self.max_velocity != self.min_velocity else 0
-
-        if t < 0.5:
-            # Blue to Green
-            r = int(0 + (255 * (t * 2)))
-            g = int(255 - (255 * (t * 2)))
-            b = 255
-        else:
-            # Green to Red
-            r = int(255)
-            g = int(255 - (255 * ((t - 0.5) * 2)))
-            b = int(255 * (1 - ((t - 0.5) * 2)))
-        return f'#{r:02x}{g:02x}{b:02x}'
-
-    def __draw_spline(self):
+    def draw_spline(self):
         for i in range(len(self.spline_points) - 1):
-            x1, y1 = self.world_to_canvas_coords(
-                self.spline_points[i][0], self.spline_points[i][1])
-            x2, y2 = self.world_to_canvas_coords(
-                self.spline_points[i+1][0], self.spline_points[i+1][1])
+            x1, y1 = self.world_to_canvas_coords(self.spline_points[i][0], self.spline_points[i][1])
+            x2, y2 = self.world_to_canvas_coords(self.spline_points[i+1][0], self.spline_points[i+1][1])
 
             v1 = self.spline_points[i][2] if len(self.spline_points[i]) > 2 else 1.0
             v2 = self.spline_points[i+1][2] if len(self.spline_points[i+1]) > 2 else 1.0
             avg_velocity = (v1 + v2) / 2
-            color = self.__velocity_to_color(avg_velocity)
+            color = velocity_to_color(avg_velocity, self.min_velocity, self.max_velocity)
 
-            # Draw the line even if slightly out of bounds to maintain continuity
-            self.canvas.create_line(
-                x1, y1, x2, y2, fill=color, width=3, tags="spline",
-                smooth=True, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+            self.canvas.create_line(x1, y1, x2, y2, fill=color, width=3, tags="spline",
+                                    smooth=True, capstyle=tk.ROUND, joinstyle=tk.ROUND)
     
     def draw_simple_spline_fallback(self):
-        """Draw a simple smooth curve when spline generation fails"""
         if len(self.raceline_points) < 2:
             return
 
-        # Draw smooth lines between consecutive points with velocity-based coloring
         for i in range(len(self.raceline_points)):
             curr_point = self.raceline_points[i]
-            next_point = self.raceline_points[(
-                i + 1) % len(self.raceline_points)]
+            next_point = self.raceline_points[(i + 1) % len(self.raceline_points)]
 
             x1, y1 = self.world_to_canvas_coords(curr_point[0], curr_point[1])
             x2, y2 = self.world_to_canvas_coords(next_point[0], next_point[1])
 
-            # Get velocity for this segment
             v1 = curr_point[2] if len(curr_point) > 2 else 1.0
             v2 = next_point[2] if len(next_point) > 2 else 1.0
             avg_velocity = (v1 + v2) / 2
-            color = self.__velocity_to_color(avg_velocity)
+            color = velocity_to_color(avg_velocity, self.min_velocity, self.max_velocity)
 
-            # Draw with smooth appearance
             if (0 <= x1 <= self.canvas_width and 0 <= y1 <= self.canvas_height and
                     0 <= x2 <= self.canvas_width and 0 <= y2 <= self.canvas_height):
-                self.canvas.create_line(
-                    x1, y1, x2, y2, fill=color, width=3, tags="spline",
-                    smooth=True, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+                self.canvas.create_line(x1, y1, x2, y2, fill=color, width=3, tags="spline",
+                                        smooth=True, capstyle=tk.ROUND, joinstyle=tk.ROUND)
 
     def force_spline_update(self, event=None):
         """Force an immediate spline update - used for real-time slider updates"""
@@ -721,28 +586,9 @@ class RacelineEditorGUI:
             except Exception as e:
                 self.status_var.set(f"Error updating coordinates: {str(e)}")
 
-    def load_raceline(self):
-        """Load raceline from file dialog"""
-        file_path = filedialog.askopenfilename(
-            title="Load Raceline",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
-        )
 
-        if file_path:
-            self.load_raceline_from_csv(file_path)
-
-    def load_map(self):
-        """Load map from file dialog"""
-        file_path = filedialog.askopenfilename(
-            title="Load Map YAML",
-            filetypes=[("YAML files", "*.yaml"), ("All files", "*.*")]
-        )
-
-        if file_path:
-            self.load_map_from_yaml(file_path)
 
     def save_raceline(self):
-        """Save raceline to file"""
         if not self.raceline_points:
             messagebox.showwarning("Warning", "No raceline to save")
             return
@@ -755,34 +601,13 @@ class RacelineEditorGUI:
 
         if file_path:
             try:
-                with open(file_path, 'w', newline='') as f:
-                    writer = csv.writer(f)
-                    
-                    if not self.save_from_spline:
-                        for point in self.raceline_points:
-                            writer.writerow(
-                                [f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"])
-                    else:
-                        self.__save_path_from_spline(writer)
+                save_raceline_to_csv(file_path, self.raceline_points, self.spline_points, self.save_from_spline)
                 self.current_file = file_path
                 self.status_var.set(f"Saved to {file_path}")
                 messagebox.showinfo("Success", "Raceline saved successfully!")
-
             except Exception as e:
-                messagebox.showerror(
-                    "Error", f"Failed to save raceline: {str(e)}")
+                messagebox.showerror("Error", f"Failed to save raceline: {str(e)}")
 
-    def __save_path_from_spline(self, writer):
-        """Save raceline points based on the current spline points"""
-        if not self.spline_points:
-            messagebox.showerror(
-                "Error", "No spline points to save"
-            )
-            return
-
-        # Save spline points with default velocity (or could interpolate velocity)
-        for point in self.spline_points:
-            writer.writerow([f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"])
 
 def main():
     root = tk.Tk()
