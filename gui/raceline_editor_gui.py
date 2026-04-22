@@ -109,7 +109,7 @@ class RacelineEditorGUI:
             side=tk.LEFT, padx=2
         )
         ttk.Checkbutton(
-            control_frame, text="Save from Spline", command=self.set_save_from_spline
+            control_frame, text="Save from Spline", command=self.toggle_save_from_spline
         ).pack(side=tk.LEFT, padx=2)
         self.region_mode_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
@@ -123,7 +123,39 @@ class RacelineEditorGUI:
         right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
         right_frame.pack_propagate(False)
 
-        file_frame = ttk.LabelFrame(right_frame, text="File Operations")
+        right_scroll_container = ttk.Frame(right_frame)
+        right_scroll_container.pack(fill=tk.BOTH, expand=True)
+
+        self.right_panel_canvas = tk.Canvas(
+            right_scroll_container,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.right_panel_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        right_scrollbar = ttk.Scrollbar(
+            right_scroll_container,
+            orient=tk.VERTICAL,
+            command=self.right_panel_canvas.yview,
+        )
+        right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.right_panel_canvas.configure(yscrollcommand=right_scrollbar.set)
+
+        right_content = ttk.Frame(self.right_panel_canvas)
+        self.right_panel_canvas_window = self.right_panel_canvas.create_window(
+            (0, 0),
+            window=right_content,
+            anchor=tk.NW,
+        )
+
+        right_content.bind("<Configure>", self.on_right_panel_configure)
+        self.right_panel_canvas.bind("<Configure>", self.on_right_panel_canvas_configure)
+
+        for widget in (right_frame, right_scroll_container, self.right_panel_canvas, right_content):
+            widget.bind("<Enter>", self.bind_right_panel_mousewheel)
+            widget.bind("<Leave>", self.unbind_right_panel_mousewheel)
+
+        file_frame = ttk.LabelFrame(right_content, text="File Operations")
         file_frame.pack(fill=tk.X, pady=(0, 10))
 
         ttk.Button(file_frame, text="Load Raceline", command=self.load_raceline).pack(
@@ -142,13 +174,13 @@ class RacelineEditorGUI:
             file_frame, text="Save Region Metadata", command=self.save_region_metadata
         ).pack(fill=tk.X, pady=2)
 
-        info_frame = ttk.LabelFrame(right_frame, text="Point Information")
+        info_frame = ttk.LabelFrame(right_content, text="Point Information")
         info_frame.pack(fill=tk.X, pady=(0, 10))
 
         self.info_text = tk.Text(info_frame, height=8, width=34)
         self.info_text.pack(fill=tk.BOTH, expand=True)
 
-        edit_frame = ttk.LabelFrame(right_frame, text="Point Editing")
+        edit_frame = ttk.LabelFrame(right_content, text="Point Editing")
         edit_frame.pack(fill=tk.X, pady=(0, 10))
 
         velocity_frame = ttk.Frame(edit_frame)
@@ -200,7 +232,7 @@ class RacelineEditorGUI:
         self.x_entry.config(state="disabled")
         self.y_entry.config(state="disabled")
 
-        region_frame = ttk.LabelFrame(right_frame, text="Regions")
+        region_frame = ttk.LabelFrame(right_content, text="Regions")
         region_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
         self.region_selection_var = tk.StringVar(value="Selection: -")
@@ -261,7 +293,7 @@ class RacelineEditorGUI:
         self.region_listbox.pack(fill=tk.BOTH, expand=True)
         self.region_listbox.bind("<<ListboxSelect>>", self.on_region_list_select)
 
-        spline_frame = ttk.LabelFrame(right_frame, text="Spline Settings")
+        spline_frame = ttk.LabelFrame(right_content, text="Spline Settings")
         spline_frame.pack(fill=tk.X, pady=(0, 10))
 
         ttk.Label(spline_frame, text="Smoothness:").pack()
@@ -300,7 +332,26 @@ class RacelineEditorGUI:
         self.root.bind("<Control-o>", lambda event: self.load_raceline())
         self.root.focus_set()
 
-    def set_save_from_spline(self):
+    def on_right_panel_configure(self, event):
+        self.right_panel_canvas.configure(scrollregion=self.right_panel_canvas.bbox("all"))
+
+    def on_right_panel_canvas_configure(self, event):
+        self.right_panel_canvas.itemconfigure(
+            self.right_panel_canvas_window,
+            width=event.width,
+        )
+
+    def bind_right_panel_mousewheel(self, event=None):
+        self.right_panel_canvas.bind_all("<MouseWheel>", self.on_right_panel_mousewheel)
+
+    def unbind_right_panel_mousewheel(self, event=None):
+        self.right_panel_canvas.unbind_all("<MouseWheel>")
+
+    def on_right_panel_mousewheel(self, event):
+        if event.delta:
+            self.right_panel_canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def toggle_save_from_spline(self):
         self.save_from_spline = not self.save_from_spline
         state = "enabled" if self.save_from_spline else "disabled"
         self.status_var.set(f"Save from spline {state}")
@@ -1029,6 +1080,8 @@ class RacelineEditorGUI:
 
     def toggle_region_mode(self):
         self.set_region_mode(self.region_mode_var.get())
+        state = "enabled" if self.save_from_spline else "disabled"
+        self.status_var.set(f"Region mode {state}")
 
     def set_region_mode(self, enabled):
         self.region_mode = enabled
