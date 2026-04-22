@@ -3,14 +3,11 @@ from tkinter import ttk, filedialog, messagebox
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
-import pandas as pd
 import yaml
 import csv
 import os
-from scipy.interpolate import UnivariateSpline, splprep, splev
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from config.config import drawer_config, extractor_config
+from scipy.interpolate import splprep, splev
+from config import DrawerConfig
 
 
 class RacelineEditorGUI:
@@ -26,6 +23,8 @@ class RacelineEditorGUI:
         self.current_file = None
         self.selected_point_idx = None
         self.spline_points = []
+        self.min_velocity = 0.5
+        self.max_velocity = 5.0
 
         # UI state
         self.canvas_width = 800
@@ -33,6 +32,7 @@ class RacelineEditorGUI:
         self.scale_factor = 1.0
         self.offset_x = 0
         self.offset_y = 0
+        self.save_from_spline = False 
 
         self.setup_ui()
         self.load_default_data()
@@ -55,6 +55,16 @@ class RacelineEditorGUI:
                                 bg='white', bd=2, relief=tk.SUNKEN)
         self.canvas.pack(pady=(0, 10))
 
+        # Velocity legend
+        legend_frame = ttk.Frame(left_frame)
+        legend_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(legend_frame, text="Velocity:", font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
+
+        # Create gradient-like legend with colored labels
+        legend_colors_frame = ttk.Frame(legend_frame)
+        legend_colors_frame.pack(side=tk.LEFT, expand=True, fill=tk.X)
+
         # Bind mouse events
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
@@ -71,6 +81,9 @@ class RacelineEditorGUI:
                    command=self.delete_selected_point).pack(side=tk.LEFT, padx=2)
         ttk.Button(control_frame, text="Reset View",
                    command=self.reset_view).pack(side=tk.LEFT, padx=2)
+        ttk.Button(control_frame, text="Save from Spline",
+                   command=self.set_save_from_spline).pack(side=tk.LEFT, padx=2)
+
 
         # Right panel for controls and info
         right_frame = ttk.Frame(main_frame, width=300)
@@ -185,16 +198,22 @@ class RacelineEditorGUI:
         self.root.bind('<Control-o>', lambda e: self.load_raceline())
         self.root.focus_set()  # Allow root to receive key events
 
+    def set_save_from_spline(self):
+        """Toggle whether to save from spline points or original points"""
+        self.save_from_spline = not self.save_from_spline
+        state = "enabled" if self.save_from_spline else "disabled"
+        self.status_var.set(f"Save from Spline {state}")
+    
     def load_default_data(self):
         """Load default map and raceline data"""
         try:
             # Load map
-            map_yaml_path = drawer_config.MAP_YAML.value
+            map_yaml_path = DrawerConfig.MAP_YAML.value
             if os.path.exists(map_yaml_path):
                 self.load_map_from_yaml(map_yaml_path)
 
             # Load raceline
-            raceline_path = drawer_config.RACING_CSV.value
+            raceline_path = DrawerConfig.RACING_CSV.value
             if os.path.exists(raceline_path):
                 self.load_raceline_from_csv(raceline_path)
 
@@ -244,11 +263,14 @@ class RacelineEditorGUI:
                         x, y = float(row[0]), float(row[1])
                         velocity = float(row[2]) if len(row) > 2 else 1.0
                         self.raceline_points.append([x, y, velocity])
-
+              
             # Validate the loaded points
             if len(self.raceline_points) < 2:
                 raise ValueError("Need at least 2 points for a raceline")
 
+            self.min_velocity = min(point[2] for point in self.raceline_points)
+            self.max_velocity = max(point[2] for point in self.raceline_points)
+            
             # Check for duplicate points that might cause spline issues
             unique_points = []
             for i, point in enumerate(self.raceline_points):
@@ -390,6 +412,7 @@ class RacelineEditorGUI:
             points = np.array(self.raceline_points)
             x_coords = points[:, 0]
             y_coords = points[:, 1]
+            v_coords = points[:, 2]
 
             # Remove any duplicate consecutive points that might cause issues
             unique_indices = []
@@ -403,11 +426,13 @@ class RacelineEditorGUI:
 
             x_coords = x_coords[unique_indices]
             y_coords = y_coords[unique_indices]
+            v_coords = v_coords[unique_indices]
 
             # For closed loop, duplicate first point at end
             x_coords_closed = np.append(x_coords, x_coords[0])
             y_coords_closed = np.append(y_coords, y_coords[0])
-
+            v_coords_closed = np.append(v_coords, v_coords[0])
+            
             # Get spline parameters
             smoothness = max(0.0, self.smoothness_var.get())
             resolution = max(50, int(self.resolution_var.get()))
@@ -442,20 +467,11 @@ class RacelineEditorGUI:
             # Generate spline points
             new_t = np.linspace(0, 1, resolution)
             spline_coords = splev(new_t, tck)
+            v_spline = np.interp(new_t, u, v_coords_closed)
+            
+            self.spline_points = list(zip(spline_coords[0], spline_coords[1], v_spline))
 
-            self.spline_points = list(zip(spline_coords[0], spline_coords[1]))
-
-            # Draw spline with better visibility
-            for i in range(len(self.spline_points) - 1):
-                x1, y1 = self.world_to_canvas_coords(
-                    self.spline_points[i][0], self.spline_points[i][1])
-                x2, y2 = self.world_to_canvas_coords(
-                    self.spline_points[i+1][0], self.spline_points[i+1][1])
-
-                # Draw the line even if slightly out of bounds to maintain continuity
-                self.canvas.create_line(
-                    x1, y1, x2, y2, fill="green", width=3, tags="spline",
-                    smooth=True, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+            self.__draw_spline()
 
         except Exception as e:
             # Fallback: draw simple lines between points if spline fails
@@ -477,12 +493,46 @@ class RacelineEditorGUI:
 
             self.draw_simple_spline_fallback()
 
+    def __velocity_to_color(self, velocity):
+        """Map velocity to a color (blue=slow, green=medium, red=fast)"""
+        v = max(self.min_velocity, min(self.max_velocity, velocity))
+        t = (v - self.min_velocity) / (self.max_velocity - self.min_velocity) if self.max_velocity != self.min_velocity else 0
+
+        if t < 0.5:
+            # Blue to Green
+            r = int(0 + (255 * (t * 2)))
+            g = int(255 - (255 * (t * 2)))
+            b = 255
+        else:
+            # Green to Red
+            r = int(255)
+            g = int(255 - (255 * ((t - 0.5) * 2)))
+            b = int(255 * (1 - ((t - 0.5) * 2)))
+        return f'#{r:02x}{g:02x}{b:02x}'
+
+    def __draw_spline(self):
+        for i in range(len(self.spline_points) - 1):
+            x1, y1 = self.world_to_canvas_coords(
+                self.spline_points[i][0], self.spline_points[i][1])
+            x2, y2 = self.world_to_canvas_coords(
+                self.spline_points[i+1][0], self.spline_points[i+1][1])
+
+            v1 = self.spline_points[i][2] if len(self.spline_points[i]) > 2 else 1.0
+            v2 = self.spline_points[i+1][2] if len(self.spline_points[i+1]) > 2 else 1.0
+            avg_velocity = (v1 + v2) / 2
+            color = self.__velocity_to_color(avg_velocity)
+
+            # Draw the line even if slightly out of bounds to maintain continuity
+            self.canvas.create_line(
+                x1, y1, x2, y2, fill=color, width=3, tags="spline",
+                smooth=True, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+    
     def draw_simple_spline_fallback(self):
         """Draw a simple smooth curve when spline generation fails"""
         if len(self.raceline_points) < 2:
             return
 
-        # Draw smooth lines between consecutive points
+        # Draw smooth lines between consecutive points with velocity-based coloring
         for i in range(len(self.raceline_points)):
             curr_point = self.raceline_points[i]
             next_point = self.raceline_points[(
@@ -491,11 +541,17 @@ class RacelineEditorGUI:
             x1, y1 = self.world_to_canvas_coords(curr_point[0], curr_point[1])
             x2, y2 = self.world_to_canvas_coords(next_point[0], next_point[1])
 
+            # Get velocity for this segment
+            v1 = curr_point[2] if len(curr_point) > 2 else 1.0
+            v2 = next_point[2] if len(next_point) > 2 else 1.0
+            avg_velocity = (v1 + v2) / 2
+            color = self.__velocity_to_color(avg_velocity)
+
             # Draw with smooth appearance
             if (0 <= x1 <= self.canvas_width and 0 <= y1 <= self.canvas_height and
                     0 <= x2 <= self.canvas_width and 0 <= y2 <= self.canvas_height):
                 self.canvas.create_line(
-                    x1, y1, x2, y2, fill="green", width=3, tags="spline",
+                    x1, y1, x2, y2, fill=color, width=3, tags="spline",
                     smooth=True, capstyle=tk.ROUND, joinstyle=tk.ROUND)
 
     def force_spline_update(self, event=None):
@@ -701,10 +757,13 @@ class RacelineEditorGUI:
             try:
                 with open(file_path, 'w', newline='') as f:
                     writer = csv.writer(f)
-                    for point in self.raceline_points:
-                        writer.writerow(
-                            [f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"])
-
+                    
+                    if not self.save_from_spline:
+                        for point in self.raceline_points:
+                            writer.writerow(
+                                [f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"])
+                    else:
+                        self.__save_path_from_spline(writer)
                 self.current_file = file_path
                 self.status_var.set(f"Saved to {file_path}")
                 messagebox.showinfo("Success", "Raceline saved successfully!")
@@ -713,6 +772,17 @@ class RacelineEditorGUI:
                 messagebox.showerror(
                     "Error", f"Failed to save raceline: {str(e)}")
 
+    def __save_path_from_spline(self, writer):
+        """Save raceline points based on the current spline points"""
+        if not self.spline_points:
+            messagebox.showerror(
+                "Error", "No spline points to save"
+            )
+            return
+
+        # Save spline points with default velocity (or could interpolate velocity)
+        for point in self.spline_points:
+            writer.writerow([f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"])
 
 def main():
     root = tk.Tk()
