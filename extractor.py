@@ -1,7 +1,9 @@
 import csv
 import json
 import os
-from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import ClassVar, Final
 
 import cv2
 import yaml
@@ -82,9 +84,6 @@ class OvertakingAllowedRegion(Region):
         )
 
 
-SpeedMultiplierRegion = ConstantSpeedMultiplierRegion
-
-
 REGION_TYPES = {
     ConstantSpeedMultiplierRegion.REGION_TYPE: ConstantSpeedMultiplierRegion,
     OvertakingAllowedRegion.REGION_TYPE: OvertakingAllowedRegion,
@@ -133,7 +132,10 @@ def load_raceline_from_csv(csv_path):
         for point in raceline_points:
             is_duplicate = False
             for existing in unique_points:
-                if abs(point[0] - existing[0]) < 1e-10 and abs(point[1] - existing[1]) < 1e-10:
+                if (
+                    abs(point[0] - existing[0]) < 1e-10
+                    and abs(point[1] - existing[1]) < 1e-10
+                ):
                     is_duplicate = True
                     break
             if not is_duplicate:
@@ -144,17 +146,23 @@ def load_raceline_from_csv(csv_path):
         raise Exception(f"Failed to load raceline: {str(e)}")
 
 
-def save_raceline_to_csv(file_path, raceline_points, spline_points=None, use_spline=False):
+def save_raceline_to_csv(
+    file_path, raceline_points, spline_points=None, use_spline=False
+):
     try:
         with open(file_path, "w", newline="") as f:
             writer = csv.writer(f)
 
             if not use_spline or not spline_points:
                 for point in raceline_points:
-                    writer.writerow([f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"])
+                    writer.writerow(
+                        [f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"]
+                    )
             else:
                 for point in spline_points:
-                    writer.writerow([f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"])
+                    writer.writerow(
+                        [f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"]
+                    )
         return True
     except Exception as e:
         raise Exception(f"Failed to save raceline: {str(e)}")
@@ -163,10 +171,22 @@ def save_raceline_to_csv(file_path, raceline_points, spline_points=None, use_spl
 def region_multiplier_for_index(point_index, regions):
     multiplier = 1.0
     for region in regions:
-        normalized_region = region.normalized()
-        if normalized_region.start_index <= point_index <= normalized_region.end_index:
-            multiplier *= normalized_region.multiplier
+        if isinstance(region, ConstantSpeedMultiplierRegion) and region.covers_index(
+            point_index
+        ):
+            multiplier *= float(region.multiplier)
     return multiplier
+
+
+def can_overtake_for_index(point_index, regions):
+    for region in regions:
+        if (
+            isinstance(region, OvertakingAllowedRegion)
+            and region.can_overtake
+            and region.covers_index(point_index)
+        ):
+            return True
+    return False
 
 
 def apply_regions_to_points(raceline_points, regions):
@@ -181,7 +201,9 @@ def remove_regions_from_points(raceline_points, regions):
     for index, point in enumerate(raceline_points):
         multiplier = region_multiplier_for_index(index, regions)
         if multiplier == 0:
-            raise ValueError(f"Cannot remove region effects for point {index} because multiplier is zero")
+            raise ValueError(
+                f"Cannot remove region effects for point {index} because multiplier is zero"
+            )
         restored_points.append([point[0], point[1], point[2] / multiplier])
     return restored_points
 
@@ -211,7 +233,7 @@ def save_regions_to_json(json_path, regions, velocities_applied=True):
             os.makedirs(directory, exist_ok=True)
 
         payload = {
-            "version": 1,
+            "version": 2,
             "velocities_applied": velocities_applied,
             "regions": [region.to_dict() for region in regions],
         }
@@ -228,7 +250,7 @@ def load_regions_from_json(json_path):
         with open(json_path, "r") as f:
             payload = json.load(f)
 
-        regions = [Region.from_dict(region) for region in payload.get("regions", [])]
+        regions = [region_from_dict(region) for region in payload.get("regions", [])]
         return {
             "version": int(payload.get("version", 1)),
             "velocities_applied": bool(payload.get("velocities_applied", False)),
@@ -236,3 +258,66 @@ def load_regions_from_json(json_path):
         }
     except Exception as e:
         raise Exception(f"Failed to load region metadata: {str(e)}")
+
+
+def overtaking_flags_for_path(base_point_count, regions, output_point_count=None):
+    if base_point_count <= 0:
+        return []
+
+    base_flags = [
+        can_overtake_for_index(point_index, regions)
+        for point_index in range(base_point_count)
+    ]
+    if output_point_count is None or output_point_count == base_point_count:
+        return base_flags
+
+    if output_point_count <= 1:
+        return [base_flags[0]]
+
+    max_base_index = base_point_count - 1
+    max_output_index = output_point_count - 1
+    return [
+        base_flags[int(round(output_index * max_base_index / max_output_index))]
+        for output_index in range(output_point_count)
+    ]
+
+
+def build_overtaking_export_rows(
+    raceline_points, regions, spline_points=None, use_spline=False
+):
+    export_points = spline_points if use_spline and spline_points else raceline_points
+    flags = overtaking_flags_for_path(
+        len(raceline_points),
+        regions,
+        output_point_count=len(export_points),
+    )
+    return [
+        [point[0], point[1], can_overtake]
+        for point, can_overtake in zip(export_points, flags)
+    ]
+
+
+def save_overtaking_to_csv(
+    file_path, raceline_points, regions, spline_points=None, use_spline=False
+):
+    try:
+        rows = build_overtaking_export_rows(
+            raceline_points,
+            regions,
+            spline_points=spline_points,
+            use_spline=use_spline,
+        )
+        with open(file_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["x_m", "y_m", "can_overtake"])
+            for x_value, y_value, can_overtake in rows:
+                writer.writerow(
+                    [
+                        f"{x_value:.7f}",
+                        f"{y_value:.7f}",
+                        str(bool(can_overtake)).lower(),
+                    ]
+                )
+        return True
+    except Exception as e:
+        raise Exception(f"Failed to save overtaking CSV: {str(e)}")
