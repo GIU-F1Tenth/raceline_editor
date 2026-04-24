@@ -36,7 +36,7 @@ class Region(ABC):
 
 @dataclass
 class ConstantSpeedMultiplierRegion(Region):
-    REGION_TYPE: ClassVar[str] = "speed_multiplier"
+    REGION_TYPE: ClassVar[str] = "Constant Speed Multiplier"
 
     multiplier: float = 1.0
 
@@ -61,7 +61,7 @@ class ConstantSpeedMultiplierRegion(Region):
 
 @dataclass
 class OvertakingAllowedRegion(Region):
-    REGION_TYPE: ClassVar[str] = "overtaking_allowed"
+    REGION_TYPE: ClassVar[str] = "Overtaking Allowed"
 
     can_overtake: bool = field(default=True, kw_only=True)
 
