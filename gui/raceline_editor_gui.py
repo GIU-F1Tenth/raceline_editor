@@ -7,8 +7,10 @@ from PIL import Image, ImageTk
 
 from config import DrawerConfig
 from extractor import (
-    Region,
+    OvertakingAllowedRegion,
+    ConstantSpeedMultiplierRegion,
     apply_regions_to_points,
+    can_overtake_for_index,
     default_metadata_path,
     find_metadata_path_for_raceline,
     load_map_from_yaml,
@@ -16,8 +18,10 @@ from extractor import (
     load_regions_from_json,
     region_multiplier_for_index,
     remove_regions_from_points,
+    save_overtaking_to_csv,
     save_raceline_to_csv,
     save_regions_to_json,
+    REGION_TYPES,
 )
 from spline import generate_spline, velocity_to_color
 
@@ -149,9 +153,16 @@ class RacelineEditorGUI:
         )
 
         right_content.bind("<Configure>", self.on_right_panel_configure)
-        self.right_panel_canvas.bind("<Configure>", self.on_right_panel_canvas_configure)
+        self.right_panel_canvas.bind(
+            "<Configure>", self.on_right_panel_canvas_configure
+        )
 
-        for widget in (right_frame, right_scroll_container, self.right_panel_canvas, right_content):
+        for widget in (
+            right_frame,
+            right_scroll_container,
+            self.right_panel_canvas,
+            right_content,
+        ):
             widget.bind("<Enter>", self.bind_right_panel_mousewheel)
             widget.bind("<Leave>", self.unbind_right_panel_mousewheel)
 
@@ -164,6 +175,9 @@ class RacelineEditorGUI:
         ttk.Button(file_frame, text="Save Raceline", command=self.save_raceline).pack(
             fill=tk.X, pady=2
         )
+        ttk.Button(
+            file_frame, text="Save Overtaking CSV", command=self.save_overtaking_csv
+        ).pack(fill=tk.X, pady=2)
         ttk.Button(file_frame, text="Load Map", command=self.load_map).pack(
             fill=tk.X, pady=2
         )
@@ -254,25 +268,51 @@ class RacelineEditorGUI:
             row=0, column=1, columnspan=3, sticky=tk.EW, padx=(5, 0)
         )
 
-        ttk.Label(region_form, text="Start:").grid(row=1, column=0, sticky=tk.W, pady=(4, 0))
-        self.region_start_var = tk.StringVar()
-        ttk.Entry(region_form, textvariable=self.region_start_var, width=8).grid(
-            row=1, column=1, sticky=tk.W, padx=(5, 10), pady=(4, 0)
+        ttk.Label(region_form, text="Type:").grid(
+            row=1, column=0, sticky=tk.W, pady=(4, 0)
+        )
+        self.region_type_var = tk.StringVar(
+            value=ConstantSpeedMultiplierRegion.REGION_TYPE
+        )
+        self.region_type_combo = ttk.Combobox(
+            region_form,
+            textvariable=self.region_type_var,
+            values=list(REGION_TYPES.keys()),
+            state="readonly",
+        )
+        self.region_type_combo.grid(
+            row=1, column=1, columnspan=3, sticky=tk.EW, padx=(5, 0), pady=(4, 0)
+        )
+        self.region_type_combo.bind(
+            "<<ComboboxSelected>>", self.update_region_type_controls
         )
 
-        ttk.Label(region_form, text="End:").grid(row=1, column=2, sticky=tk.W, pady=(4, 0))
-        self.region_end_var = tk.StringVar()
-        ttk.Entry(region_form, textvariable=self.region_end_var, width=8).grid(
-            row=1, column=3, sticky=tk.W, pady=(4, 0)
-        )
-
-        ttk.Label(region_form, text="Multiplier:").grid(
+        ttk.Label(region_form, text="Start:").grid(
             row=2, column=0, sticky=tk.W, pady=(4, 0)
         )
-        self.region_multiplier_var = tk.StringVar(value="1.0")
-        ttk.Entry(region_form, textvariable=self.region_multiplier_var, width=8).grid(
+        self.region_start_var = tk.StringVar()
+        ttk.Entry(region_form, textvariable=self.region_start_var, width=8).grid(
             row=2, column=1, sticky=tk.W, padx=(5, 10), pady=(4, 0)
         )
+
+        ttk.Label(region_form, text="End:").grid(
+            row=2, column=2, sticky=tk.W, pady=(4, 0)
+        )
+        self.region_end_var = tk.StringVar()
+        ttk.Entry(region_form, textvariable=self.region_end_var, width=8).grid(
+            row=2, column=3, sticky=tk.W, pady=(4, 0)
+        )
+
+        self.region_value_label = ttk.Label(region_form, text="Multiplier:")
+        self.region_value_label.grid(row=3, column=0, sticky=tk.W, pady=(4, 0))
+        self.region_multiplier_var = tk.StringVar(value="1.0")
+        self.region_multiplier_entry = ttk.Entry(
+            region_form, textvariable=self.region_multiplier_var, width=8
+        )
+        self.region_multiplier_entry.grid(
+            row=3, column=1, sticky=tk.W, padx=(5, 10), pady=(4, 0)
+        )
+        self.region_true_value_label = ttk.Label(region_form, text="True")
         region_form.columnconfigure(1, weight=1)
         region_form.columnconfigure(3, weight=1)
 
@@ -292,6 +332,7 @@ class RacelineEditorGUI:
         self.region_listbox = tk.Listbox(region_frame, height=10, exportselection=False)
         self.region_listbox.pack(fill=tk.BOTH, expand=True)
         self.region_listbox.bind("<<ListboxSelect>>", self.on_region_list_select)
+        self.update_region_type_controls()
 
         spline_frame = ttk.LabelFrame(right_content, text="Spline Settings")
         spline_frame.pack(fill=tk.X, pady=(0, 10))
@@ -333,7 +374,9 @@ class RacelineEditorGUI:
         self.root.focus_set()
 
     def on_right_panel_configure(self, event):
-        self.right_panel_canvas.configure(scrollregion=self.right_panel_canvas.bbox("all"))
+        self.right_panel_canvas.configure(
+            scrollregion=self.right_panel_canvas.bbox("all")
+        )
 
     def on_right_panel_canvas_configure(self, event):
         self.right_panel_canvas.itemconfigure(
@@ -422,7 +465,9 @@ class RacelineEditorGUI:
 
         metadata_path = find_metadata_path_for_raceline(file_path)
         if metadata_path:
-            self.load_region_metadata_from_file(metadata_path, normalize_loaded_points=True)
+            self.load_region_metadata_from_file(
+                metadata_path, normalize_loaded_points=True
+            )
         else:
             self.refresh_region_ui()
 
@@ -467,7 +512,9 @@ class RacelineEditorGUI:
         regions = payload["regions"]
 
         if normalize_loaded_points and payload["velocities_applied"]:
-            self.raceline_points = remove_regions_from_points(self.raceline_points, regions)
+            self.raceline_points = remove_regions_from_points(
+                self.raceline_points, regions
+            )
 
         self.regions = regions
         self.current_metadata_file = file_path
@@ -515,6 +562,61 @@ class RacelineEditorGUI:
             initialfile=initial_file,
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
         )
+
+    def current_region_type(self):
+        return self.region_type_var.get()
+
+    def set_region_type_selection(self, region_type):
+        self.region_type_var.set(region_type)
+        self.update_region_type_controls()
+
+    def update_region_type_controls(self, event=None):
+        is_speed_region = (
+            self.current_region_type() == ConstantSpeedMultiplierRegion.REGION_TYPE
+        )
+        self.region_value_label.config(
+            text="Multiplier:" if is_speed_region else "Can Overtake:"
+        )
+
+        if is_speed_region:
+            self.region_true_value_label.grid_remove()
+            self.region_multiplier_entry.grid(
+                row=3, column=1, sticky=tk.W, padx=(5, 10), pady=(4, 0)
+            )
+            if not self.region_multiplier_var.get().strip():
+                self.region_multiplier_var.set("1.0")
+        else:
+            self.region_multiplier_entry.grid_remove()
+            self.region_true_value_label.grid(
+                row=3, column=1, sticky=tk.W, padx=(5, 10), pady=(4, 0)
+            )
+
+    def region_type_for_region(self, region):
+        if isinstance(region, ConstantSpeedMultiplierRegion):
+            return ConstantSpeedMultiplierRegion.REGION_TYPE
+        if isinstance(region, OvertakingAllowedRegion):
+            return OvertakingAllowedRegion.REGION_TYPE
+        return ""
+
+    def region_name_for_display(self, region, region_index=None):
+        if region.name:
+            return region.name
+        if region_index is not None:
+            return f"Zone {region_index + 1}"
+        return "Zone"
+
+    def region_value_text(self, region):
+        if isinstance(region, ConstantSpeedMultiplierRegion):
+            return f"x{region.multiplier:.3f}"
+        if isinstance(region, OvertakingAllowedRegion):
+            return f"can_overtake={str(region.can_overtake).lower()}"
+        return ""
+
+    def region_list_text(self, region, region_index):
+        name = self.region_name_for_display(region, region_index)
+        region_type = self.region_type_for_region(region)
+        value_text = self.region_value_text(region)
+        return f"{name} [{region_type}]: {region.start_index}-{region.end_index} {value_text}"
 
     def world_to_canvas_coords(self, x, y):
         if not self.map_metadata:
@@ -572,7 +674,9 @@ class RacelineEditorGUI:
             next_point = self.raceline_points[(index + 1) % len(self.raceline_points)]
             x1, y1 = self.world_to_canvas_coords(current_point[0], current_point[1])
             x2, y2 = self.world_to_canvas_coords(next_point[0], next_point[1])
-            self.canvas.create_line(x1, y1, x2, y2, fill="red", width=2, tags="raceline")
+            self.canvas.create_line(
+                x1, y1, x2, y2, fill="red", width=2, tags="raceline"
+            )
 
         self.draw_regions()
         self.draw_region_preview()
@@ -592,7 +696,9 @@ class RacelineEditorGUI:
                 tags=f"point_{index}",
             )
 
-            if index == self.selected_point_idx or (index % 5 == 0 and self.scale_factor > 0.5):
+            if index == self.selected_point_idx or (
+                index % 5 == 0 and self.scale_factor > 0.5
+            ):
                 effective_velocity = self.get_effective_velocity(index)
                 text_color = "black" if index == self.selected_point_idx else "gray"
                 self.canvas.create_text(
@@ -608,7 +714,12 @@ class RacelineEditorGUI:
         for region_index, region in enumerate(self.regions):
             color = self.region_color(region_index)
             width = 6 if region_index == self.selected_region_idx else 4
-            dash = None if region_index == self.selected_region_idx else (6, 4)
+            if region_index == self.selected_region_idx:
+                dash = None
+            elif isinstance(region, OvertakingAllowedRegion):
+                dash = (2, 3)
+            else:
+                dash = (6, 4)
 
             for point_index in range(region.start_index, region.end_index):
                 point_a = self.raceline_points[point_index]
@@ -655,12 +766,16 @@ class RacelineEditorGUI:
 
             label_index = (region.start_index + region.end_index) // 2
             label_point = self.raceline_points[label_index]
-            label_x, label_y = self.world_to_canvas_coords(label_point[0], label_point[1])
-            region_name = region.name or f"Zone {region_index + 1}"
+            label_x, label_y = self.world_to_canvas_coords(
+                label_point[0], label_point[1]
+            )
             self.canvas.create_text(
                 label_x + 18,
                 label_y + 16,
-                text=f"{region_name} x{region.multiplier:.2f}",
+                text=(
+                    f"{self.region_name_for_display(region, region_index)} "
+                    f"{self.region_value_text(region)}"
+                ),
                 fill=color,
                 font=("Arial", 9, "bold"),
                 anchor=tk.W,
@@ -706,7 +821,12 @@ class RacelineEditorGUI:
     def point_fill_color(self, point_index):
         if point_index == self.selected_point_idx:
             return "yellow"
-        if self.region_preview_range and self.region_preview_range[0] <= point_index <= self.region_preview_range[1]:
+        if (
+            self.region_preview_range
+            and self.region_preview_range[0]
+            <= point_index
+            <= self.region_preview_range[1]
+        ):
             return "#00c2ff"
         region_index = self.last_region_covering_point(point_index)
         if region_index is not None:
@@ -754,7 +874,9 @@ class RacelineEditorGUI:
         try:
             smoothness = max(0.0, self.smoothness_var.get())
             resolution = max(50, int(self.resolution_var.get()))
-            self.spline_points = generate_spline(effective_points, smoothness, resolution)
+            self.spline_points = generate_spline(
+                effective_points, smoothness, resolution
+            )
 
             if self.spline_points is None:
                 self.spline_points = []
@@ -775,8 +897,12 @@ class RacelineEditorGUI:
             x2, y2 = self.world_to_canvas_coords(
                 self.spline_points[index + 1][0], self.spline_points[index + 1][1]
             )
-            avg_velocity = (self.spline_points[index][2] + self.spline_points[index + 1][2]) / 2
-            color = velocity_to_color(avg_velocity, self.min_velocity, self.max_velocity)
+            avg_velocity = (
+                self.spline_points[index][2] + self.spline_points[index + 1][2]
+            ) / 2
+            color = velocity_to_color(
+                avg_velocity, self.min_velocity, self.max_velocity
+            )
             self.canvas.create_line(
                 x1,
                 y1,
@@ -800,7 +926,9 @@ class RacelineEditorGUI:
             x1, y1 = self.world_to_canvas_coords(current_point[0], current_point[1])
             x2, y2 = self.world_to_canvas_coords(next_point[0], next_point[1])
             avg_velocity = (current_point[2] + next_point[2]) / 2
-            color = velocity_to_color(avg_velocity, self.min_velocity, self.max_velocity)
+            color = velocity_to_color(
+                avg_velocity, self.min_velocity, self.max_velocity
+            )
             self.canvas.create_line(
                 x1,
                 y1,
@@ -979,9 +1107,7 @@ class RacelineEditorGUI:
                 end_index += 1
             elif start_index < insert_index <= end_index:
                 end_index += 1
-            updated_regions.append(
-                Region(start_index, end_index, region.multiplier, region.name)
-            )
+            updated_regions.append(region.with_indices(start_index, end_index))
         self.regions = updated_regions
         self.refresh_region_ui()
 
@@ -998,27 +1124,38 @@ class RacelineEditorGUI:
                 end_index -= 1
 
             if start_index <= end_index:
-                updated_regions.append(
-                    Region(start_index, end_index, region.multiplier, region.name)
-                )
+                updated_regions.append(region.with_indices(start_index, end_index))
 
         self.regions = updated_regions
 
     def update_info_display(self):
         self.info_text.delete(1.0, tk.END)
 
+        speed_region_count = sum(
+            isinstance(region, ConstantSpeedMultiplierRegion) for region in self.regions
+        )
+        overtaking_region_count = sum(
+            isinstance(region, OvertakingAllowedRegion) for region in self.regions
+        )
         info = f"Total Points: {len(self.raceline_points)}\n"
-        info += f"Regions: {len(self.regions)}\n\n"
+        info += (
+            f"Regions: {len(self.regions)} "
+            f"(speed={speed_region_count}, overtaking={overtaking_region_count})\n\n"
+        )
 
         if self.selected_point_idx is not None:
             point = self.raceline_points[self.selected_point_idx]
-            multiplier = region_multiplier_for_index(self.selected_point_idx, self.regions)
+            multiplier = region_multiplier_for_index(
+                self.selected_point_idx, self.regions
+            )
+            can_overtake = can_overtake_for_index(self.selected_point_idx, self.regions)
             effective_velocity = point[2] * multiplier
             info += f"Selected Point #{self.selected_point_idx}\n"
             info += f"X: {point[0]:.6f}\n"
             info += f"Y: {point[1]:.6f}\n"
             info += f"Base Velocity: {point[2]:.3f}\n"
             info += f"Region Multiplier: {multiplier:.3f}\n"
+            info += f"Can Overtake: {'Yes' if can_overtake else 'No'}\n"
             info += f"Effective Velocity: {effective_velocity:.3f}\n\n"
 
             self.velocity_var.set(point[2])
@@ -1032,12 +1169,18 @@ class RacelineEditorGUI:
             self.x_entry.config(state="disabled")
             self.y_entry.config(state="disabled")
 
-        if self.selected_region_idx is not None and self.selected_region_idx < len(self.regions):
+        if self.selected_region_idx is not None and self.selected_region_idx < len(
+            self.regions
+        ):
             region = self.regions[self.selected_region_idx]
-            region_name = region.name or f"Zone {self.selected_region_idx + 1}"
+            region_name = self.region_name_for_display(region, self.selected_region_idx)
             info += f"Selected Region: {region_name}\n"
+            info += f"Type: {self.region_type_for_region(region)}\n"
             info += f"Range: {region.start_index} - {region.end_index}\n"
-            info += f"Multiplier: {region.multiplier:.3f}\n\n"
+            if isinstance(region, ConstantSpeedMultiplierRegion):
+                info += f"Multiplier: {region.multiplier:.3f}\n\n"
+            elif isinstance(region, OvertakingAllowedRegion):
+                info += f"Can Overtake: {'Yes' if region.can_overtake else 'No'}\n\n"
 
         if self.spline_points:
             info += f"Spline Points: {len(self.spline_points)}\n"
@@ -1080,7 +1223,7 @@ class RacelineEditorGUI:
 
     def toggle_region_mode(self):
         self.set_region_mode(self.region_mode_var.get())
-        state = "enabled" if self.save_from_spline else "disabled"
+        state = "enabled" if self.region_mode else "disabled"
         self.status_var.set(f"Region mode {state}")
 
     def set_region_mode(self, enabled):
@@ -1110,6 +1253,7 @@ class RacelineEditorGUI:
             self.region_end_var.set("")
             self.region_selection_var.set("Selection: -")
         self.region_multiplier_var.set("1.0")
+        self.update_region_type_controls()
         self.update_region_save_button()
         self.update_info_display()
         self.update_display()
@@ -1122,13 +1266,8 @@ class RacelineEditorGUI:
         try:
             start_index = int(self.region_start_var.get())
             end_index = int(self.region_end_var.get())
-            multiplier = float(self.region_multiplier_var.get())
         except ValueError:
-            messagebox.showerror("Error", "Start, end, and multiplier must be valid numbers")
-            return
-
-        if multiplier <= 0:
-            messagebox.showerror("Error", "Multiplier must be greater than zero")
+            messagebox.showerror("Error", "Start and end must be valid whole numbers")
             return
 
         start_index, end_index = sorted((start_index, end_index))
@@ -1141,7 +1280,31 @@ class RacelineEditorGUI:
             return
 
         name = self.region_name_var.get().strip() or self.next_region_name()
-        region = Region(start_index, end_index, multiplier, name)
+        region_type = self.current_region_type()
+        if region_type == ConstantSpeedMultiplierRegion.REGION_TYPE:
+            try:
+                multiplier = float(self.region_multiplier_var.get())
+            except ValueError:
+                messagebox.showerror("Error", "Multiplier must be a valid number")
+                return
+
+            if multiplier <= 0:
+                messagebox.showerror("Error", "Multiplier must be greater than zero")
+                return
+
+            region = ConstantSpeedMultiplierRegion(
+                start_index,
+                end_index,
+                multiplier,
+                name=name,
+            )
+        else:
+            region = OvertakingAllowedRegion(
+                start_index,
+                end_index,
+                name=name,
+                can_overtake=True,
+            )
 
         if self.selected_region_idx is None:
             self.regions.append(region)
@@ -1158,11 +1321,13 @@ class RacelineEditorGUI:
         self.update_display()
         self.update_info_display()
         self.status_var.set(
-            f"Saved region {region.name or f'Zone {self.selected_region_idx + 1}'}"
+            f"Saved region {self.region_name_for_display(region, self.selected_region_idx)}"
         )
 
     def delete_selected_region(self):
-        if self.selected_region_idx is None or self.selected_region_idx >= len(self.regions):
+        if self.selected_region_idx is None or self.selected_region_idx >= len(
+            self.regions
+        ):
             self.status_var.set("Select a region to delete")
             return
 
@@ -1174,6 +1339,7 @@ class RacelineEditorGUI:
         self.region_end_var.set("")
         self.region_multiplier_var.set("1.0")
         self.region_selection_var.set("Selection: -")
+        self.update_region_type_controls()
         self.refresh_region_ui()
         self.refresh_velocity_bounds()
         self.update_display()
@@ -1190,7 +1356,11 @@ class RacelineEditorGUI:
         self.region_name_var.set(region.name)
         self.region_start_var.set(str(region.start_index))
         self.region_end_var.set(str(region.end_index))
-        self.region_multiplier_var.set(f"{region.multiplier:.3f}")
+        self.set_region_type_selection(self.region_type_for_region(region))
+        if isinstance(region, ConstantSpeedMultiplierRegion):
+            self.region_multiplier_var.set(f"{region.multiplier:.3f}")
+        else:
+            self.region_multiplier_var.set("1.0")
         self.region_preview_range = (region.start_index, region.end_index)
         self.region_selection_var.set(
             f"Selection: {region.start_index} - {region.end_index}"
@@ -1205,13 +1375,13 @@ class RacelineEditorGUI:
     def refresh_region_ui(self):
         self.region_listbox.delete(0, tk.END)
         for region_index, region in enumerate(self.regions):
-            name = region.name or f"Zone {region_index + 1}"
             self.region_listbox.insert(
-                tk.END,
-                f"{name}: {region.start_index}-{region.end_index} x{region.multiplier:.3f}",
+                tk.END, self.region_list_text(region, region_index)
             )
 
-        if self.selected_region_idx is not None and self.selected_region_idx < len(self.regions):
+        if self.selected_region_idx is not None and self.selected_region_idx < len(
+            self.regions
+        ):
             self.region_listbox.selection_set(self.selected_region_idx)
         else:
             self.selected_region_idx = None
@@ -1223,8 +1393,46 @@ class RacelineEditorGUI:
         self.update_region_save_button()
 
     def update_region_save_button(self):
-        button_text = "Update Region" if self.selected_region_idx is not None else "Create Region"
+        button_text = (
+            "Update Region" if self.selected_region_idx is not None else "Create Region"
+        )
         self.region_save_button.config(text=button_text)
+
+    def default_overtaking_filename(self):
+        if not self.current_file:
+            return "overtaking.csv"
+        file_stem, _ = os.path.splitext(os.path.basename(self.current_file))
+        return f"{file_stem}_overtaking.csv"
+
+    def save_overtaking_csv(self):
+        if not self.raceline_points:
+            messagebox.showwarning("Warning", "No raceline to save")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="Save Overtaking CSV",
+            defaultextension=".csv",
+            initialfile=self.default_overtaking_filename(),
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+
+        if not file_path:
+            return
+
+        try:
+            self.refresh_velocity_bounds()
+            self.update_spline()
+            save_overtaking_to_csv(
+                file_path,
+                self.raceline_points,
+                self.regions,
+                self.spline_points,
+                self.save_from_spline,
+            )
+            self.status_var.set(f"Saved overtaking CSV to {file_path}")
+            messagebox.showinfo("Success", "Overtaking CSV saved successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save overtaking CSV: {str(e)}")
 
     def save_raceline(self):
         if not self.raceline_points:
@@ -1234,7 +1442,9 @@ class RacelineEditorGUI:
         raceline_path = filedialog.asksaveasfilename(
             title="Save Raceline",
             defaultextension=".csv",
-            initialfile=os.path.basename(self.current_file) if self.current_file else "raceline.csv",
+            initialfile=os.path.basename(self.current_file)
+            if self.current_file
+            else "raceline.csv",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
         )
 
@@ -1259,7 +1469,9 @@ class RacelineEditorGUI:
             )
 
             if metadata_path:
-                save_regions_to_json(metadata_path, self.regions, velocities_applied=True)
+                save_regions_to_json(
+                    metadata_path, self.regions, velocities_applied=True
+                )
                 self.current_metadata_file = metadata_path
 
             self.current_file = raceline_path
