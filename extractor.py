@@ -47,9 +47,9 @@ class ConstantSpeedMultiplierRegion(Region):
             "multiplier": float(self.multiplier),
         }
 
-    @classmethod
-    def from_dict(cls, data):
-        return cls(
+    @staticmethod
+    def from_dict(data):
+        return ConstantSpeedMultiplierRegion(
             start_index=int(data["start"]),
             end_index=int(data["end"]),
             multiplier=float(data.get("multiplier", 1.0)),
@@ -64,7 +64,6 @@ class OvertakingAllowedRegion(Region):
     can_overtake: bool = field(default=True, kw_only=True)
 
     def to_dict(self):
-        region = self.normalized()
         return {
             "type": self.REGION_TYPE,
             "name": self.name,
@@ -73,14 +72,31 @@ class OvertakingAllowedRegion(Region):
             "can_overtake": bool(self.can_overtake),
         }
 
-    @classmethod
-    def from_dict(cls, data):
-        return cls(
+    @staticmethod
+    def from_dict(data):
+        return OvertakingAllowedRegion(
             start_index=int(data["start"]),
             end_index=int(data["end"]),
             name=str(data.get("name", "")),
             can_overtake=bool(data.get("can_overtake", True)),
-        ).normalized()
+        )
+
+
+SpeedMultiplierRegion = ConstantSpeedMultiplierRegion
+
+
+REGION_TYPES = {
+    ConstantSpeedMultiplierRegion.REGION_TYPE: ConstantSpeedMultiplierRegion,
+    OvertakingAllowedRegion.REGION_TYPE: OvertakingAllowedRegion,
+}
+
+
+def region_from_dict(data):
+    region_type = str(data.get("type", ConstantSpeedMultiplierRegion.REGION_TYPE))
+    region_cls = REGION_TYPES.get(region_type)
+    if region_cls is None:
+        raise ValueError(f"Unsupported region type: {region_type}")
+    return region_cls.from_dict(data)
 
 
 def load_map_from_yaml(yaml_path):
