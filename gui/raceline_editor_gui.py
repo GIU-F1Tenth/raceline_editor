@@ -6,9 +6,12 @@ import cv2
 from PIL import Image, ImageTk
 
 from config import DrawerConfig
-from extractor import (
-    OvertakingAllowedRegion,
+from extractor.regions import (
+    REGION_TYPES,
     ConstantSpeedMultiplierRegion,
+    OvertakingAllowedRegion,
+)
+from extractor.utils import (
     apply_regions_to_points,
     can_overtake_for_index,
     default_metadata_path,
@@ -21,7 +24,6 @@ from extractor import (
     save_overtaking_to_csv,
     save_raceline_to_csv,
     save_regions_to_json,
-    REGION_TYPES,
 )
 from spline import generate_spline, velocity_to_color
 

@@ -1,93 +1,15 @@
 import csv
 import json
 import os
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import ClassVar
 
 import cv2
 import yaml
 
-
-@dataclass
-class Region(ABC):
-    start_index: int
-    end_index: int
-    name: str = field(default="", kw_only=True)
-
-    def __post_init__(self):
-        start_index = min(self.start_index, self.end_index)
-        end_index = max(self.start_index, self.end_index)
-        self.start_index = start_index
-        self.end_index = end_index
-
-    def covers_index(self, point_index):
-        return self.start_index <= point_index <= self.end_index
-
-    @staticmethod
-    @abstractmethod
-    def from_dict(cls, data):
-        raise NotImplementedError
-
-    @abstractmethod
-    def to_dict(self):
-        raise NotImplementedError
-
-
-@dataclass
-class ConstantSpeedMultiplierRegion(Region):
-    REGION_TYPE: ClassVar[str] = "Constant Speed Multiplier"
-
-    multiplier: float = 1.0
-
-    def to_dict(self):
-        return {
-            "type": self.REGION_TYPE,
-            "name": self.name,
-            "start": self.start_index,
-            "end": self.end_index,
-            "multiplier": float(self.multiplier),
-        }
-
-    @staticmethod
-    def from_dict(data):
-        return ConstantSpeedMultiplierRegion(
-            start_index=int(data["start"]),
-            end_index=int(data["end"]),
-            multiplier=float(data.get("multiplier", 1.0)),
-            name=str(data.get("name", "")),
-        )
-
-
-@dataclass
-class OvertakingAllowedRegion(Region):
-    REGION_TYPE: ClassVar[str] = "Overtaking Allowed"
-
-    can_overtake: bool = field(default=True, kw_only=True)
-
-    def to_dict(self):
-        return {
-            "type": self.REGION_TYPE,
-            "name": self.name,
-            "start": self.start_index,
-            "end": self.end_index,
-            "can_overtake": bool(self.can_overtake),
-        }
-
-    @staticmethod
-    def from_dict(data):
-        return OvertakingAllowedRegion(
-            start_index=int(data["start"]),
-            end_index=int(data["end"]),
-            name=str(data.get("name", "")),
-            can_overtake=bool(data.get("can_overtake", True)),
-        )
-
-
-REGION_TYPES = {
-    ConstantSpeedMultiplierRegion.REGION_TYPE: ConstantSpeedMultiplierRegion,
-    OvertakingAllowedRegion.REGION_TYPE: OvertakingAllowedRegion,
-}
+from extractor.regions import (
+    REGION_TYPES,
+    ConstantSpeedMultiplierRegion,
+    OvertakingAllowedRegion,
+)
 
 
 def region_from_dict(data):
