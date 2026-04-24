@@ -8,24 +8,43 @@ import yaml
 
 
 @dataclass
-class Region:
+class Region(ABC):
     start_index: int
     end_index: int
-    multiplier: float
-    name: str = ""
+    name: str = field(default="", kw_only=True)
 
-    def normalized(self):
+    def __post_init__(self):
         start_index = min(self.start_index, self.end_index)
         end_index = max(self.start_index, self.end_index)
-        return Region(start_index, end_index, float(self.multiplier), self.name)
+        self.start_index = start_index
+        self.end_index = end_index
+
+    def covers_index(self, point_index):
+        return self.start_index <= point_index <= self.end_index
+
+    @staticmethod
+    @abstractmethod
+    def from_dict(cls, data):
+        raise NotImplementedError
+
+    @abstractmethod
+    def to_dict(self):
+        raise NotImplementedError
+
+
+@dataclass
+class ConstantSpeedMultiplierRegion(Region):
+    REGION_TYPE: ClassVar[str] = "speed_multiplier"
+
+    multiplier: float = 1.0
 
     def to_dict(self):
-        region = self.normalized()
         return {
-            "name": region.name,
-            "start": region.start_index,
-            "end": region.end_index,
-            "multiplier": region.multiplier,
+            "type": self.REGION_TYPE,
+            "name": self.name,
+            "start": self.start_index,
+            "end": self.end_index,
+            "multiplier": float(self.multiplier),
         }
 
     @classmethod
@@ -33,8 +52,34 @@ class Region:
         return cls(
             start_index=int(data["start"]),
             end_index=int(data["end"]),
-            multiplier=float(data["multiplier"]),
+            multiplier=float(data.get("multiplier", 1.0)),
             name=str(data.get("name", "")),
+        )
+
+
+@dataclass
+class OvertakingAllowedRegion(Region):
+    REGION_TYPE: ClassVar[str] = "overtaking_allowed"
+
+    can_overtake: bool = field(default=True, kw_only=True)
+
+    def to_dict(self):
+        region = self.normalized()
+        return {
+            "type": self.REGION_TYPE,
+            "name": self.name,
+            "start": self.start_index,
+            "end": self.end_index,
+            "can_overtake": bool(self.can_overtake),
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            start_index=int(data["start"]),
+            end_index=int(data["end"]),
+            name=str(data.get("name", "")),
+            can_overtake=bool(data.get("can_overtake", True)),
         ).normalized()
 
 
