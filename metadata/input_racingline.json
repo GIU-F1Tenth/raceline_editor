@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "velocities_applied": true,
+  "regions": [
+    {
+      "type": "Constant Speed Multiplier",
+      "name": "Zone 1",
+      "start": 0,
+      "end": 20,
+      "multiplier": 10000.0
+    },
+    {
+      "type": "Overtaking Allowed",
+      "name": "Zone 2",
+      "start": 64,
+      "end": 117,
+      "can_overtake": true
+    },
+    {
+      "type": "Overtaking Allowed",
+      "name": "Zone 3",
+      "start": 123,
+      "end": 125,
+      "can_overtake": true
+    }
+  ]
+}
