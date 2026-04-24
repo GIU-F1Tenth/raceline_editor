@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import messagebox
 
 from extractor.regions import (
-    REGION_TYPES,
     ConstantSpeedMultiplierRegion,
     OvertakingAllowedRegion,
 )

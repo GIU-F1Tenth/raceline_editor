@@ -1,12 +1,11 @@
 import tkinter as tk
+
 import cv2
 from PIL import Image, ImageTk
 
 from extractor.regions import (
-    ConstantSpeedMultiplierRegion,
     OvertakingAllowedRegion,
 )
-from extractor.utils import region_multiplier_for_index
 from spline import velocity_to_color
 
 
