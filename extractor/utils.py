@@ -69,22 +69,17 @@ def load_raceline_from_csv(csv_path):
 
 
 def save_raceline_to_csv(
-    file_path, raceline_points, spline_points=None, use_spline=False
+    file_path,
+    raceline_points,
 ):
     try:
         with open(file_path, "w", newline="") as f:
             writer = csv.writer(f)
+            for point in raceline_points:
+                writer.writerow(
+                    [f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"]
+                )
 
-            if not use_spline or not spline_points:
-                for point in raceline_points:
-                    writer.writerow(
-                        [f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"]
-                    )
-            else:
-                for point in spline_points:
-                    writer.writerow(
-                        [f"{point[0]:.7f}", f"{point[1]:.7f}", f"{point[2]:.7f}"]
-                    )
         return True
     except Exception as e:
         raise Exception(f"Failed to save raceline: {str(e)}")

@@ -240,12 +240,17 @@ class FileOperations:
             effective_points = self.gui.point_ops.get_effective_raceline_points()
             self.gui.point_ops.refresh_velocity_bounds()
             self.gui.spline_ops.update_spline()
-            save_raceline_to_csv(
-                raceline_path,
-                effective_points,
-                self.gui.spline_points,
-                self.gui.save_from_spline,
-            )
+
+            if self.gui.save_from_spline and self.gui.spline_points:
+                save_raceline_to_csv(
+                    raceline_path,
+                    self.gui.spline_points,
+                )
+            else:
+                save_raceline_to_csv(
+                    raceline_path,
+                    effective_points,
+                )
 
             if metadata_path:
                 save_regions_to_json(
