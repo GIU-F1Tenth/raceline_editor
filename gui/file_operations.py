@@ -9,6 +9,7 @@ from extractor.utils import (
     load_raceline_from_csv,
     load_regions_from_json,
     remove_regions_from_points,
+    save_curvature_to_csv,
     save_overtaking_to_csv,
     save_raceline_to_csv,
     save_regions_to_json,
@@ -183,6 +184,12 @@ class FileOperations:
         file_stem, _ = os.path.splitext(os.path.basename(self.gui.current_file))
         return f"{file_stem}_overtaking.csv"
 
+    def default_curvature_filename(self):
+        if not self.gui.current_file:
+            return "curvature.csv"
+        file_stem, _ = os.path.splitext(os.path.basename(self.gui.current_file))
+        return f"{file_stem}_curvature.csv"
+
     def save_overtaking_csv(self):
         if not self.gui.raceline_points:
             messagebox.showwarning("Warning", "No raceline to save")
@@ -212,6 +219,36 @@ class FileOperations:
             messagebox.showinfo("Success", "Overtaking CSV saved successfully!")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save overtaking CSV: {str(e)}")
+
+    def save_curvature_csv(self):
+        if not self.gui.raceline_points:
+            messagebox.showwarning("Warning", "No raceline to save")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="Save Curvature CSV",
+            defaultextension=".csv",
+            initialfile=self.default_curvature_filename(),
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+
+        if not file_path:
+            return
+
+        try:
+            self.gui.point_ops.refresh_velocity_bounds()
+            self.gui.spline_ops.update_spline()
+            save_curvature_to_csv(
+                file_path,
+                self.gui.raceline_points,
+                self.gui.regions,
+                self.gui.spline_points,
+                self.gui.save_from_spline,
+            )
+            self.gui.status_var.set(f"Saved curvature CSV to {file_path}")
+            messagebox.showinfo("Success", "Curvature CSV saved successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save curvature CSV: {str(e)}")
 
     def save_raceline(self):
         if not self.gui.raceline_points:

@@ -3,6 +3,7 @@ from tkinter import messagebox
 
 from extractor.regions import (
     ConstantSpeedMultiplierRegion,
+    CurvatureRegion,
     OvertakingAllowedRegion,
 )
 
@@ -23,6 +24,8 @@ class RegionOperations:
             return ConstantSpeedMultiplierRegion.REGION_TYPE
         if isinstance(region, OvertakingAllowedRegion):
             return OvertakingAllowedRegion.REGION_TYPE
+        if isinstance(region, CurvatureRegion):
+            return CurvatureRegion.REGION_TYPE
         return ""
 
     def region_name_for_display(self, region, region_index=None):
@@ -37,6 +40,8 @@ class RegionOperations:
             return f"x{region.multiplier:.3f}"
         if isinstance(region, OvertakingAllowedRegion):
             return f"can_overtake={str(region.can_overtake).lower()}"
+        if isinstance(region, CurvatureRegion):
+            return f"is_curved={str(region.is_curved).lower()}"
         return ""
 
     def region_list_text(self, region, region_index):
@@ -105,13 +110,23 @@ class RegionOperations:
                 multiplier,
                 name=name,
             )
-        else:
+        elif region_type == OvertakingAllowedRegion.REGION_TYPE:
             region = OvertakingAllowedRegion(
                 start_index,
                 end_index,
                 name=name,
                 can_overtake=True,
             )
+        elif region_type == CurvatureRegion.REGION_TYPE:
+            region = CurvatureRegion(
+                start_index,
+                end_index,
+                name=name,
+                is_curved=True,
+            )
+        else:
+            messagebox.showerror("Error", f"Unknown region type: {region_type}")
+            return
 
         if self.gui.selected_region_idx is None:
             self.gui.regions.append(region)

@@ -4,6 +4,8 @@ from tkinter import ttk
 from extractor.regions import (
     REGION_TYPES,
     ConstantSpeedMultiplierRegion,
+    OvertakingAllowedRegion,
+    CurvatureRegion,
 )
 
 
@@ -140,6 +142,11 @@ class UIBuilder:
             file_frame,
             text="Save Overtaking CSV",
             command=self.gui.file_ops.save_overtaking_csv,
+        ).pack(fill=tk.X, pady=2)
+        ttk.Button(
+            file_frame,
+            text="Save Curvature CSV",
+            command=self.gui.file_ops.save_curvature_csv,
         ).pack(fill=tk.X, pady=2)
         ttk.Button(
             file_frame, text="Load Map", command=self.gui.file_ops.load_map
@@ -401,23 +408,27 @@ class UIBuilder:
         self.gui.status_var.set(f"Save from spline {state}")
 
     def update_region_type_controls(self, event=None):
-        is_speed_region = (
-            self.gui.region_ops.current_region_type()
-            == ConstantSpeedMultiplierRegion.REGION_TYPE
-        )
-        self.gui.region_value_label.config(
-            text="Multiplier:" if is_speed_region else "Can Overtake:"
-        )
+        region_type = self.gui.region_ops.current_region_type()
+        is_speed_region = region_type == ConstantSpeedMultiplierRegion.REGION_TYPE
+        is_overtaking_region = region_type == OvertakingAllowedRegion.REGION_TYPE
+        is_curvature_region = region_type == CurvatureRegion.REGION_TYPE
 
         if is_speed_region:
+            self.gui.region_value_label.config(text="Multiplier:")
             self.gui.region_true_value_label.grid_remove()
             self.gui.region_multiplier_entry.grid(
                 row=3, column=1, sticky=tk.W, padx=(5, 10), pady=(4, 0)
             )
             if not self.gui.region_multiplier_var.get().strip():
                 self.gui.region_multiplier_var.set("1.0")
-        else:
+        elif is_overtaking_region or is_curvature_region:
+            label_text = "Can Overtake:" if is_overtaking_region else "Is Curved:"
+            self.gui.region_value_label.config(text=label_text)
             self.gui.region_multiplier_entry.grid_remove()
             self.gui.region_true_value_label.grid(
                 row=3, column=1, sticky=tk.W, padx=(5, 10), pady=(4, 0)
             )
+        else:
+            self.gui.region_value_label.config(text="")
+            self.gui.region_multiplier_entry.grid_remove()
+            self.gui.region_true_value_label.grid_remove()
