@@ -9,6 +9,7 @@ from extractor.regions import (
     REGION_TYPES,
     ConstantSpeedMultiplierRegion,
     OvertakingAllowedRegion,
+    CurvatureRegion,
 )
 
 
@@ -100,6 +101,17 @@ def can_overtake_for_index(point_index, regions):
         if (
             isinstance(region, OvertakingAllowedRegion)
             and region.can_overtake
+            and region.covers_index(point_index)
+        ):
+            return True
+    return False
+
+
+def is_curved_for_index(point_index, regions):
+    for region in regions:
+        if (
+            isinstance(region, CurvatureRegion)
+            and region.is_curved
             and region.covers_index(point_index)
         ):
             return True
@@ -199,6 +211,28 @@ def overtaking_flags_for_path(base_point_count, regions, output_point_count=None
     ]
 
 
+def curvature_flags_for_path(base_point_count, regions, output_point_count=None):
+    if base_point_count <= 0:
+        return []
+
+    base_flags = [
+        is_curved_for_index(point_index, regions)
+        for point_index in range(base_point_count)
+    ]
+    if output_point_count is None or output_point_count == base_point_count:
+        return base_flags
+
+    if output_point_count <= 1:
+        return [base_flags[0]]
+
+    max_base_index = base_point_count - 1
+    max_output_index = output_point_count - 1
+    return [
+        base_flags[int(round(output_index * max_base_index / max_output_index))]
+        for output_index in range(output_point_count)
+    ]
+
+
 def build_overtaking_export_rows(
     raceline_points, regions, spline_points=None, use_spline=False
 ):
@@ -211,6 +245,21 @@ def build_overtaking_export_rows(
     return [
         [point[0], point[1], can_overtake]
         for point, can_overtake in zip(export_points, flags)
+    ]
+
+
+def build_curvature_export_rows(
+    raceline_points, regions, spline_points=None, use_spline=False
+):
+    export_points = spline_points if use_spline and spline_points else raceline_points
+    flags = curvature_flags_for_path(
+        len(raceline_points),
+        regions,
+        output_point_count=len(export_points),
+    )
+    return [
+        [point[0], point[1], is_curved]
+        for point, is_curved in zip(export_points, flags)
     ]
 
 
@@ -238,3 +287,29 @@ def save_overtaking_to_csv(
         return True
     except Exception as e:
         raise Exception(f"Failed to save overtaking CSV: {str(e)}")
+
+
+def save_curvature_to_csv(
+    file_path, raceline_points, regions, spline_points=None, use_spline=False
+):
+    try:
+        rows = build_curvature_export_rows(
+            raceline_points,
+            regions,
+            spline_points=spline_points,
+            use_spline=use_spline,
+        )
+        with open(file_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["x_m", "y_m", "is_curved"])
+            for x_value, y_value, is_curved in rows:
+                writer.writerow(
+                    [
+                        f"{x_value:.7f}",
+                        f"{y_value:.7f}",
+                        str(bool(is_curved)).lower(),
+                    ]
+                )
+        return True
+    except Exception as e:
+        raise Exception(f"Failed to save curvature CSV: {str(e)}")
